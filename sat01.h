@@ -68,6 +68,8 @@ struct Sat01 {
   void propagate(VEMap& ve);
   void pack();
 
+  void light_preprocess();
+
   void preprocess();
 
   void var_in_equ(int var_no, Equ* equ);

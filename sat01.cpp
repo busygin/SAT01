@@ -386,6 +386,74 @@ void Sat01::pack(){
   printf("%d variables, %d equations remain\n",n,equs.size());
 }
 
+void Sat01::light_preprocess(){
+  puts("Eliminating assigned variables ...");
+  vector<Equ>::iterator i;
+  list<Var*> q;
+  for(i=equs.begin();i<equs.end();++i){
+    switch(i->n){
+      case 0:throw(false);
+      case 1:
+        {Var* j=*i->begin();   /* (*i)[0]; */
+        if(!j->f)throw(false);
+        j->f=1;}
+        break;
+      default:i->mod=true;
+    }
+  }
+  vector<Var>::iterator j;
+  for(j=vars.begin();j<vars.end();++j)if(j->f!=2)q.push_back(&*j);
+  list<Equ*> modified;
+  reduce(q,modified);
+  for(i=equs.begin();i<equs.end();++i){
+    i->mod=false;
+    if(i->n){
+      find_covering_vars(vars,*i,q);
+      for(list<Var*>::iterator jj=q.begin();jj!=q.end();++jj)(*jj)->f=0;
+      reduce(q,modified);
+    }
+  }
+  while(!modified.empty()){
+    Equ* i=modified.front();
+    modified.pop_front();
+    i->mod=false;
+    if(i->n){
+      find_covering_vars(vars,*i,q);
+      for(list<Var*>::iterator jj=q.begin();jj!=q.end();++jj)(*jj)->f=0;
+      reduce(q,modified);
+    }
+  }
+  vector<Equ*>::iterator ii;
+  VEMap ve;
+  for(j=vars.begin();j<vars.end();++j)if(j->f==2){
+    VEMap::iterator p=ve.insert(ve.end(),VEMap::value_type(&*j,vector<Equ*>()));
+    vector<Equ*>& c_equs=p->second;
+    for(ii=j->equs.begin();ii<j->equs.end();++ii)(*ii)->mod=true;
+    u_long* jj=j->foes.data;
+    u_long v;
+    for(vector<Var>::iterator j1=vars.begin();j1<vars.end();j1+=b_size,++jj){
+      v=*jj;
+      vector<Var>::iterator j2=j1;
+      while(v){
+        if((v&1)&&j2->f==2){
+          for(ii=j2->equs.begin();ii<j2->equs.end();++ii){
+            Equ* i=*ii;
+            if(!i->mod){
+              VEC_INS(c_equs,i);
+              i->mod=true;
+            }
+          }
+        }
+        v>>=1;
+        ++j2;
+      }
+    }
+    for(ii=j->equs.begin();ii<j->equs.end();++ii)(*ii)->mod=false;
+    for(ii=c_equs.begin();ii!=c_equs.end();++ii)(*ii)->mod=false;
+  }
+  pack();
+}
+
 void Sat01::preprocess(){
   puts("Preprocessing ...");
   vector<Equ>::iterator i;

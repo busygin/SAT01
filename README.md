@@ -33,6 +33,12 @@ deduction of propagation.
     hcp2sat01 <hcp_file>           a Hamiltonian cycle problem (TSPLIB format)
     factor_out2sol <out_file>      the factors from a solution of factor2sat01's instance
     sat012clique [-w] [-p] <file>  the instance as a clique problem (see its usage)
+    sat01qms [-s] [-m] <file>      QUALEX-MS on the propagated instance, without search
+
+`sat01qms` runs the full propagation and then QUALEX-MS on the clique problem
+left, on the equation wrapper or (`-s`) the standard clique wrapper, with its
+stationary points at the radius of a clique of weight m with `-m`; it is built
+with `make sat01qms` and needs a LAPACK and a CBLAS (OpenBLAS by default).
 
 `factor.sh <number>` factors a number with these.
 

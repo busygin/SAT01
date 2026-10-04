@@ -20,19 +20,28 @@
 // a clique one w_min heavier than its incumbent; with -m it takes them at the
 // radius of a clique of weight m, which is what a solution weighs, with the
 // method of QUALEX-MS 1.2 (see qualex_ms()).  The wrappers differ only on the
-// non-edges, which are 0 in the
-// standard wrapper and z_i z_j - m M_ij/(z_i z_j) in H_A, M_ij the number of
-// equations i and j share: H_A ignores the contradictions between variables
-// of no common equation, those of the instance and those propagation derives.
-// The QMS_* switches of qualex-ms apply: QMS_DR among them, off unless set, and
-// QMS_META_N, which with -m adds the Meta-NBIW stage on that many of the best
+// non-edges, which are 0 in the standard wrapper and z_i z_j - m M_ij/(z_i z_j)
+// in H_A, M_ij the number of equations i and j share: H_A ignores the
+// contradictions between variables of no common equation (2-clauses), those
+// of the instance and those propagation derives.
+//
+// The top eigenspace of H_A is degenerate and holds every solution, so the
+// Douglas-Rachford stage of qualex_ms() (QMS_DR) iterates on the sphere of
+// stationary points that holds them.  Its projection onto the nonnegative
+// orthant cannot single them out, since a nonnegative point there need not
+// respect the 2-clauses; -D replaces it by the greedy 2-clause projection
+// (see two_clause_projection()) and asks for 300 iterations unless QMS_DR
+// says otherwise.  The other QMS_* switches of qualex-ms apply too, QMS_META_N
+// among them, which with -m adds the Meta-NBIW stage on that many of the best
 // multipliers at the radius of m.
 //
 // A clique of weight m is checked against the original instance and written
 // to <base>.qms.out in the format of the solver's .out files.
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <list>
@@ -79,6 +88,55 @@ static void build_equation_wrapper(const Sat01& sat01, const vector<int>& residu
     for(int t : row)
       for(int u : row)
         if(t!=u) a[(size_t)t*n+u] -= m/(z[t]*z[u]);
+}
+
+// share_equation() tells whether two variables are in a common equation
+static bool share_equation(const Variable& a, const Variable& b) {
+  vector<int>::const_iterator i = a.equations.begin(), j = b.equations.begin();
+  while(i!=a.equations.end() && j!=b.equations.end()) {
+    if(*i==*j) return true;
+    if(*i<*j) ++i;
+    else ++j;
+  }
+  return false;
+}
+
+// two_clause_projection() is the projection, for the variables left (vertex t
+// being variable residual[t]), onto the nonnegative points whose support has no
+// 2-clause, i.e. no two contradicting variables of no common equation, done
+// greedily as jam.py's clause_projector(): the entries not positive go, and the
+// others are kept from the largest down unless they 2-clash with one kept
+// before.  Within an equation the sphere of H_A already holds the equation
+// sums equal, so only the 2-clauses are left to the projection.
+static Projection two_clause_projection(const Sat01& sat01, const vector<int>& residual) {
+  int n = (int)residual.size();
+  vector<int> vertex(sat01.vars.size(),-1);
+  for(int t=0;t<n;++t) vertex[residual[t]] = t;
+  vector<vector<int>> clashes(n);  // the 2-clause partners of each vertex
+  for(int t=0;t<n;++t) {
+    const Variable& var = sat01.vars[residual[t]];
+    for(int v : var.foes.ones())
+      if(vertex[v]>=0 && !share_equation(var,sat01.vars[v])) clashes[t].push_back(vertex[v]);
+  }
+  vector<int> order(n);
+  vector<char> blocked(n);
+  return [clashes,order,blocked](double* y, int n) mutable {
+    int k = 0;
+    for(int i=0;i<n;++i) {
+      if(y[i]>0.0) order[k++] = i;
+      else y[i] = 0.0;
+    }
+    sort(order.begin(),order.begin()+k,[y](int i, int j) { return y[i]>y[j]; });
+    fill(blocked.begin(),blocked.end(),0);
+    for(int t=0;t<k;++t) {
+      int i = order[t];
+      if(blocked[i]) {
+        y[i] = 0.0;
+        continue;
+      }
+      for(int j : clashes[i]) blocked[j] = 1;
+    }
+  };
 }
 
 // split_names() adds the names of a variable, those of merged twins being
@@ -134,27 +192,33 @@ static double seconds_since(chrono::steady_clock::time_point t) {
 }
 
 int main(int argc, char** argv) {
-  bool standard = false, at_m = false;
+  bool standard = false, at_m = false, clause_dr = false;
   const char* name = nullptr;
   for(int a=1;a<argc;++a) {
     if(!strcmp(argv[a],"-s")) standard = true;
     else if(!strcmp(argv[a],"-m")) at_m = true;
+    else if(!strcmp(argv[a],"-D")) clause_dr = true;
     else name = argv[a];
   }
   if(!name) {
-    puts("Syntax: sat01qms [-s] [-m] <sat01_file>\n"
+    puts("Syntax: sat01qms [-s] [-m] [-D] <sat01_file>\n"
          "Runs the full propagation of the SAT01 solver and then QUALEX-MS, without\n"
          "search, on the clique problem left: the free variables weighted by their\n"
          "numbers of equations, adjacent iff they do not contradict.  QUALEX-MS works\n"
          "with the equation wrapper, or with -s with the standard clique wrapper, and\n"
          "with -m takes its stationary points at the radius of a clique of weight m\n"
          "(the number of equations), the weight of a solution, with the method of\n"
-         "QUALEX-MS 1.2.  A clique of weight m is a solution, which is checked\n"
-         "against the instance and written to <base>.qms.out.");
+         "QUALEX-MS 1.2.  -D runs its Douglas-Rachford stage (QMS_DR, 300 iterations\n"
+         "unless set) with the 2-clause projection instead of the orthant.  A clique\n"
+         "of weight m is a solution, which is checked against the instance and\n"
+         "written to <base>.qms.out.");
     return 1;
   }
   const char* wrapper = standard ? "standard" : "equation";
   const char* radius = at_m ? "m" : "anchor";
+  if(clause_dr) setenv("QMS_DR","300",0);
+  const char* dr = getenv("QMS_DR")==nullptr || atoi(getenv("QMS_DR"))<=0 ? "off" :
+                   clause_dr ? "clause" : "orthant";
 
   Sat01 sat01;
   try {
@@ -171,8 +235,8 @@ int main(int argc, char** argv) {
   if(status!=Status::open) {
     puts(status==Status::solved ? "A solution has been found by the propagation."
                                 : "The propagation has revealed that no solution exists.");
-    printf("RESULT %s wrapper=%s radius=%s decided=%s propagation=%.2fs\n",name,wrapper,
-           radius,status==Status::solved ? "sat" : "unsat",propagation_seconds);
+    printf("RESULT %s wrapper=%s radius=%s dr=%s decided=%s propagation=%.2fs\n",name,
+           wrapper,radius,dr,status==Status::solved ? "sat" : "unsat",propagation_seconds);
     return 0;
   }
 
@@ -202,7 +266,9 @@ int main(int argc, char** argv) {
     else build_equation_wrapper(sat01,residual,info,a.data());
     // with -m, the clique sought on the vertices left weighs m less what
     // preprocessing preselected
-    qualex_ms(info,a.data(),at_m ? m-preselected_weight : 0.0);
+    Projection clause;
+    if(clause_dr) clause = two_clause_projection(sat01,residual);
+    qualex_ms(info,a.data(),at_m ? m-preselected_weight : 0.0,clause_dr ? &clause : nullptr);
     if(info.lower_clique_bound>clique_weight) {
       clique_weight = info.lower_clique_bound;
       clique.clear();
@@ -236,9 +302,9 @@ int main(int argc, char** argv) {
   printf("QUALEX-MS on the %s wrapper, radius %s: weight %g of m = %d (%s), Meta-NBIW %g\n",
          wrapper,at_m ? "of m" : "around the incumbent's",clique_weight,m,
          solution ? "a solution" : "no solution",greedy_weight);
-  printf("RESULT %s wrapper=%s radius=%s n=%d m=%d preselected=%d left=%d greedy=%g "
-         "weight=%g solution=%d verified=%s propagation=%.2fs qms=%.2fs\n",
-         name,wrapper,radius,n,m,n_preselected,n_left,greedy_weight,clique_weight,
+  printf("RESULT %s wrapper=%s radius=%s dr=%s n=%d m=%d preselected=%d left=%d "
+         "greedy=%g weight=%g solution=%d verified=%s propagation=%.2fs qms=%.2fs\n",
+         name,wrapper,radius,dr,n,m,n_preselected,n_left,greedy_weight,clique_weight,
          (int)solution,verified,propagation_seconds,qms_seconds);
   return 0;
 }

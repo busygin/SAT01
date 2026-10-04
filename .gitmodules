@@ -1,0 +1,3 @@
+[submodule "qualex-ms"]
+	path = qualex-ms
+	url = https://github.com/busygin/qualex-ms.git

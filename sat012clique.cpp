@@ -1,8 +1,14 @@
 #include <string.h>
+#include <exception>
 #include <string>
 
 #include "sat01.h"
 
+// sat012clique() writes the unweighted clique graph: each variable becomes a
+// clique of as many vertices as it has equations, two vertices of different
+// variables are adjacent iff the variables do not contradict, and the
+// instance is satisfiable iff the graph has a clique of size m (the number of
+// equations)
 void sat012clique(const Sat01& sat01, const char* fname) {
   size_t n_vert = 0;
   size_t n_vars = sat01.vars.size();
@@ -10,7 +16,7 @@ void sat012clique(const Sat01& sat01, const char* fname) {
   std::vector<size_t> var_inds(n_vars+1);
   for (size_t i=0; i<n_vars; ++i) {
     var_inds[i] = n_vert;
-    n_vert += sat01.vars[i].equs.size();
+    n_vert += sat01.vars[i].equations.size();
   }
   var_inds.back() = n_vert;
 
@@ -19,39 +25,23 @@ void sat012clique(const Sat01& sat01, const char* fname) {
 
   printf("n_vert=%ld\n", n_vert);
 
-  for (size_t i=0; i<n_vars; ++i) {
-    const bool_vector& foes = sat01.vars[i].foes;
-    u_long* jj;
-    size_t j;
-    for (j=0, jj=foes.data; j<n_vars; j+=b_size,++jj) {
-      u_long v = *jj;
-      size_t j1=j;
-      while(v) {
-        if (v&1) {
-          for (size_t k1=var_inds[i]; k1<var_inds[i+1]; ++k1)
-            for (size_t k2=var_inds[j1]; k2<var_inds[j1+1]; ++k2)
-              adj_mat[k1*n_vert+k2] = false;
-        }
-        v>>=1;
-        ++j1;
-      }
-    }
-  }
-
+  for (size_t i=0; i<n_vars; ++i)
+    for (int j : sat01.vars[i].foes.ones())
+      for (size_t k1=var_inds[i]; k1<var_inds[i+1]; ++k1)
+        for (size_t k2=var_inds[j]; k2<var_inds[j+1]; ++k2)
+          adj_mat[k1*n_vert+k2] = false;
 
   size_t n_edges = 0;
   for(size_t i=1; i<n_vert; ++i)
     for(size_t j=0; j<i; ++j) {
       // sanity check: adj_mat is symmetric
       if (adj_mat[i*n_vert+j] != adj_mat[j*n_vert+i]) {
-        printf("Error: A(%ld,%d)=%ld while A(%ld,%d)=%ld\n", i, j, size_t(adj_mat[i*n_vert+j]), j, i, size_t(adj_mat[j*n_vert+i]));
+        printf("Error: A(%ld,%ld)=%ld while A(%ld,%ld)=%ld\n", i, j, size_t(adj_mat[i*n_vert+j]), j, i, size_t(adj_mat[j*n_vert+i]));
         throw false;
       }
 
-
       if (adj_mat[i*n_vert+j]) ++n_edges;
     }
-
 
   printf("Required clique size: %ld\n", sat01.equs.size());
 
@@ -79,24 +69,12 @@ void sat012clique(const Sat01& sat01, const char* fname) {
 void sat012wclique(const Sat01& sat01, const char* base) {
   size_t n = sat01.vars.size();
   size_t m = sat01.equs.size();
-  const Var* var0 = &sat01.vars[0];
 
   std::vector<bool> adj_mat(n*n, true);
   for (size_t i=0; i<n; ++i) adj_mat[i*(n+1)] = false;
-  for (size_t i=0; i<n; ++i) {
-    const bool_vector& foes = sat01.vars[i].foes;
-    u_long* jj;
-    size_t j;
-    for (j=0, jj=foes.data; j<n; j+=b_size,++jj) {
-      u_long v = *jj;
-      size_t j1=j;
-      while(v) {
-        if (v&1) adj_mat[i*n+j1] = adj_mat[j1*n+i] = false;
-        v>>=1;
-        ++j1;
-      }
-    }
-  }
+  for (size_t i=0; i<n; ++i)
+    for (int j : sat01.vars[i].foes.ones())
+      adj_mat[i*n+j] = adj_mat[j*n+i] = false;
   size_t n_edges = 0;
   for (size_t i=1; i<n; ++i)
     for (size_t j=0; j<i; ++j)
@@ -105,7 +83,7 @@ void sat012wclique(const Sat01& sat01, const char* base) {
   std::vector<size_t> w(n);
   size_t zero = 0;
   for (size_t i=0; i<n; ++i) {
-    w[i] = sat01.vars[i].equs.size();
+    w[i] = sat01.vars[i].equations.size();
     if (!w[i]) ++zero;
   }
   if (zero) printf("Warning: %zu variables are in no equation (weight 0)\n", zero);
@@ -142,9 +120,9 @@ void sat012wclique(const Sat01& sat01, const char* base) {
 
   f = fopen((b+".equ").c_str(), "w");
   for (size_t e=0; e<m; ++e) {
-    const Equ& equ = sat01.equs[e];
-    for (size_t k=0; k<equ.size(); ++k)
-      fprintf(f, k ? " %zu" : "%zu", size_t(equ[k]-var0)+1);
+    const Equation& equ = sat01.equs[e];
+    for (size_t k=0; k<equ.vars.size(); ++k)
+      fprintf(f, k ? " %d" : "%d", equ.vars[k]+1);
     fputc('\n', f);
   }
   fclose(f);
@@ -170,43 +148,34 @@ int main(int argc, char** argv) {
   }
   const char* name = argv[a];
 
-  Sat01* sat01 = new Sat01;
-  sat01->load_bin(name);
-
-  try{
-    if (full) sat01->preprocess();
-    else sat01->light_preprocess();
+  Sat01 sat01;
+  try {
+    sat01.load_bin(name);
   }
-  catch(bool result){
+  catch (const std::exception& error) {
+    printf("ERROR: %s\n", error.what());
+    return 1;
+  }
+
+  Status status = full ? sat01.preprocess() : sat01.light_preprocess();
+  if (status != Status::open) {
+    bool solved = status == Status::solved;
     if(weighted){
-      puts(result ? "A solution has been found by preprocessing."
+      puts(solved ? "A solution has been found by preprocessing."
                   : "Preprocessing has revealed that no solution exists.");
-    }else if(result){
-      puts("Factroing has been found by preprocessing.");
+    }else if(solved){
+      puts("Factoring has been found by preprocessing.");
     }else{
       puts("Preprocessing has revealed that no factoring exists.");
     }
     return 1;
   }
 
-  if (weighted) {
-    std::string base(name);
-    size_t dot = base.rfind(".sat01");
-    if (dot != std::string::npos) base.erase(dot);
-    sat012wclique(*sat01, base.c_str());
-  } else {
-    int i=strlen(name);
-    char* clq_file_name=new char[i+7];
-    memcpy(clq_file_name,name,i+1);
-    char* p=strstr(clq_file_name,".sat01");
-    if(!p) p=clq_file_name+i;
-    strcpy(p,".clq");
-
-    sat012clique(*sat01, clq_file_name);
-
-    delete[] clq_file_name;
-  }
-  delete sat01;
+  std::string base(name);
+  size_t dot = base.rfind(".sat01");
+  if (dot != std::string::npos) base.erase(dot);
+  if (weighted) sat012wclique(sat01, base.c_str());
+  else sat012clique(sat01, (base+".clq").c_str());
 
   return 0;
 }

@@ -9,9 +9,9 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "bool_vector.h"
 #include <vector>
 #include <list>
+#include "bool_vector.h"
 #include "bin_store.h"
 
 using namespace std;
@@ -71,7 +71,7 @@ void InitProd(char* p){
 
 struct TVar{
   int No;
-  char Name[64];
+  char Name[64] = {};
   char f;
   bool_vector foes;
   TVar(int n=0):f(2),foes(n){}
@@ -179,21 +179,12 @@ void InitTempBits(){
   xy[1][1][0][0].f=*Prod.begin();
 }
 
+// CompleteCausal() makes x contradict every foe of y
 void CompleteCausal(TVar& x,TVar& y){
-  vector<TVar*>::iterator jj;
-  u_long* vv;
-  for(jj=Vars.begin(),vv=y.foes.data;jj<Vars.end();jj+=b_size,++vv){
-    u_long mask=*vv;
-    vector<TVar*>::iterator jj1=jj;
-    while(mask){
-      if(mask&1){
-        TVar* j=*jj1;
-        x.foes.put(j->No);
-        j->foes.put(x.No);
-      }
-      mask>>=1;
-      ++jj1;
-    }
+  for(int k : y.foes.ones()){
+    TVar* j=Vars[k];
+    x.foes.put(j->No);
+    j->foes.put(x.No);
   }
 }
 
@@ -403,7 +394,7 @@ void Save(char* FName){
   }
   for(jj=Vars.begin();jj<Vars.end();++jj){
     j=*jj;
-    fwrite(j->foes.data,sizeof(u_long),j->foes.data_size,F);
+    fwrite(j->foes.words(),sizeof(bool_vector::word),j->foes.n_words(),F);
   }
   write_int(Equs.size(),F);
   for(vector< vector<int> >::iterator i=Equs.begin();i<Equs.end();++i){

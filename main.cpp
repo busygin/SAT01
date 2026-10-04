@@ -12,8 +12,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <exception>
+#include <filesystem>
+#include <string>
 
 #include "sat01.h"
+
+using namespace std;
 
 int main(int argc,char** argv){
   puts(
@@ -24,17 +29,24 @@ int main(int argc,char** argv){
     "software free of charge for research and educational purposes.\n"
   );
 
-  char* name=NULL;
+  const char* name=nullptr;
+  const char* dump_dir=nullptr;
+  const char* log_name=nullptr;
   bool text=false;
-  char* p;
 
-  while(argc-->=2){
-    p=*++argv;
+  for(int a=1;a<argc;++a){
+    const char* p=argv[a];
     switch(p[0]){
       case '-':
         switch(p[1]){
           case 't':
             text=false;
+            break;
+          case 'd':
+            dump_dir=p+2;
+            break;
+          case 'l':
+            log_name=p+2;
         }
         break;
       case '+':
@@ -48,48 +60,70 @@ int main(int argc,char** argv){
     }
   }
 
-  if(name){
-    Sat01* sat01=new Sat01;
-    if(text)sat01->load_txt(name);
-    else sat01->load_bin(name);
+  if(!name){
+    puts(
+      "Syntax: sat01 [+/-t] [-d<dir>] [-l<log_file>] <sat01_file>\n"
+      "Flags:\n"
+      "+t: input file is text\n"
+      "-t: input file is binary (default)\n"
+      "-d<dir>: save the instance at every guess to directory <dir>, as\n"
+      "         guess<k>_depth<d>.sat01 (binary), for analysis\n"
+      "-l<log_file>: log every deduction of propagation to <log_file>\n"
+      "sat01_file: SAT01 instance file either text or converted from an NP problem\n"
+    );
+    return 0;
+  }
 
-    /* FILE* equfile = fopen("klaus.equ","w");
-    sat01->print_equations(equfile);
-    fclose(equfile); */
+  Sat01 sat01;
+  try{
+    if(text)sat01.load_txt(name);
+    else sat01.load_bin(name);
+  }
+  catch(const exception& error){
+    printf("ERROR: %s\n",error.what());
+    return 1;
+  }
 
-    int i=strlen(name);
-    char* sol_file_name=new char[i+7];
-    memcpy(sol_file_name,name,i+1);
-    char* p=strstr(sol_file_name,".sat01");
-    if(!p)p=sol_file_name+i;
-    strcpy(p,".out");
-    FILE* file=fopen(sol_file_name,"w");
-    delete[] sol_file_name;
+  /* FILE* equfile = fopen("klaus.equ","w");
+  sat01.print_equations(equfile);
+  fclose(equfile); */
 
-    int depth, max_depth, n_guess;
-    time_t time1,time2;
-    double dt;
-    bool flag;
-    time(&time1);
-    try{sat01->preprocess();}
-    catch(bool result){
-      time(&time2);
-      dt = difftime(time2,time1);
-      if(result){
-        puts("A solution has been found by the propagation.");
-        sat01->print_solution(file);
-      }else{
-        puts("The propagation has revealed that no solution exists.");
-        fputs("No solution\n",file);
-      }
-      goto L1;
+  if(dump_dir) filesystem::create_directories(dump_dir);
+  FILE* trace=nullptr;
+  if(log_name){
+    trace=fopen(log_name,"w");
+    if(!trace){
+      printf("ERROR: cannot open %s\n",log_name);
+      return 1;
     }
-    flag = solve(sat01,depth,max_depth,n_guess);
+    sat01.trace=trace;
+  }
+
+  string sol_file_name(name);
+  size_t ext=sol_file_name.find(".sat01");
+  if(ext!=string::npos) sol_file_name.erase(ext);
+  sol_file_name+=".out";
+  FILE* file=fopen(sol_file_name.c_str(),"w");
+
+  time_t time1,time2;
+  time(&time1);
+  Status status=sat01.preprocess();
+  if(status!=Status::open){
     time(&time2);
-    dt = difftime(time2,time1);
+    if(status==Status::solved){
+      puts("A solution has been found by the propagation.");
+      sat01.print_solution(file);
+    }else{
+      puts("The propagation has revealed that no solution exists.");
+      fputs("No solution\n",file);
+    }
+  }else{
+    int depth, max_depth, n_guess;
+    bool flag=solve(sat01,depth,max_depth,n_guess,dump_dir);
+    time(&time2);
     if(flag){
       printf("A solution has been found at Depth=%d\n",depth);
-      sat01->print_solution(file);
+      sat01.print_solution(file);
     }else{
       puts("No solution.");
       fprintf(file,"No solution.\n\n");
@@ -98,18 +132,12 @@ int main(int argc,char** argv){
       "%d heuristic guesses and %d backtracks were made\n"
       "Max Depth = %d\n"
       "Expended time = %lg sec.\n",
-      n_guess, n_guess-depth, max_depth, dt
+      n_guess, n_guess-depth, max_depth, difftime(time2,time1)
     );
-    L1:fclose(file);
-    delete sat01;
-    printf("%s: time=%lg sec.\n", name, dt);
-  }else puts (
-    "Syntax: sat01 [+/-t] <sat01_file>\n"
-    "Flags:\n"
-    "+t: input file is text\n"
-    "-t: input file is binary (default)\n"
-    "sat01_file: SAT01 instance file either text or converted from an NP problem\n"
-  );
+  }
+  fclose(file);
+  if(trace) fclose(trace);
+  printf("%s: time=%lg sec.\n", name, difftime(time2,time1));
 
   return 0;
 }

@@ -33,10 +33,10 @@ int main(int argc,char** argv){
         int No=0;
         do{No=10*No+*p++-48;}while(*p>='0'&&*p<='9');
         if(Conj[0]=='x'){
-          if(x.size()<No+1)x.resize(No+1,false);
+          if(x.size()<(size_t)No+1)x.resize(No+1,false);
           x[No]=true;
         }else{
-          if(y.size()<No+1)y.resize(No+1,false);
+          if(y.size()<(size_t)No+1)y.resize(No+1,false);
           y[No]=true;
         }
       }

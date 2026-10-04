@@ -8,14 +8,16 @@
 *****************************************************************************/
 
 #include <cstdio>
-#include "bool_vector.h"
+#include <cstdlib>
+#include <cstring>
 #include <vector>
+#include "bool_vector.h"
 #include "bin_store.h"
 
 using namespace std;
 
 struct TVar{
-  char Name[16];
+  char Name[32] = {};
   char f;
   bool_vector foes;
   TVar(int n=0):f(2),foes(n){}
@@ -36,7 +38,7 @@ void InitVars(){
   for(int i=0;i<n;++i){
     int j=(i+1)%n;
     for(int k=0;k<n;++k){
-      sprintf(Vars[i*n+k].Name,"x(%d,%d)",i,k);
+      snprintf(Vars[i*n+k].Name,sizeof(Vars[i*n+k].Name),"x(%d,%d)",i,k);
       for(int l=0;l<k;++l){
         MakeContradictory(i*n+k,j*n+l);
         MakeContradictory(i*n+l,j*n+k);
@@ -78,6 +80,13 @@ void GetLex(FILE* F,char* str){
   *p=0;
 }
 
+// Truncated() reports a file that ends before its edge data does
+void Truncated(FILE* F){
+  printf("\nERROR: Unexpected end of file\n");
+  fclose(F);
+  throw(false);
+}
+
 void Load(char* FName){
   fputs("Loading ...",stdout);
 	FILE* F=fopen(FName,"rb");
@@ -102,44 +111,44 @@ void Load(char* FName){
     }
     if(isList){
       if(isText){
-        L2:fscanf(F,"%d",&u);
+        L2:if(fscanf(F,"%d",&u)!=1)Truncated(F);
         if(u==-1)goto L4;
-        fscanf(F,"%d",&v);
+        if(fscanf(F,"%d",&v)!=1)Truncated(F);
         MakeArc(u-1,v-1);
         if(!isDirected)MakeArc(v-1,u-1);
         goto L2;
       }else{
-        L3:fread(&u,sizeof(int),1,F);
+        L3:if(fread(&u,sizeof(int),1,F)!=1)Truncated(F);
         if(u==-1)goto L4;
-        fread(&v,sizeof(int),1,F);
+        if(fread(&v,sizeof(int),1,F)!=1)Truncated(F);
         MakeArc(u,v);
         if(!isDirected)MakeArc(v,u);
         goto L3;
       }
     }else{
       if(isText){
-        for(u=!isDirected;u<n;u++)for(v=0;v<(isDirected?n:u);v++){
+        for(u=!isDirected;u<n;++u)for(v=0;v<(isDirected?n:u);++v){
           int b;
-          fscanf(F,"%d",&b);
+          if(fscanf(F,"%d",&b)!=1)Truncated(F);
           if(b){
             MakeArc(u,v);
             if(!isDirected)MakeArc(v,u);
           }
         }
       }else{
-        for(u=0;u<n;u++){
+        for(u=0;u<n;++u){
           v=0;
-          for(int byte=0;byte<=(isDirected?n:u)/8;byte++){
+          for(int byte=0;byte<=(isDirected?n:u)/8;++byte){
             char c;
-            fread(&c,1,1,F);
+            if(fread(&c,1,1,F)!=1)Truncated(F);
             char mask=128;
-            for(int bit=0;bit<8&&v<(isDirected?n:u);bit++){
+            for(int bit=0;bit<8&&v<(isDirected?n:u);++bit){
               if(c&mask){
                 MakeArc(u,v);
                 if(!isDirected)MakeArc(v,u);
               }
               mask=mask>>1;
-              v++;
+              ++v;
             }
           }
         }
@@ -212,7 +221,7 @@ void Save(char* FName){
     fputs(j->Name,F);
     fputc(j->f,F);
   }
-  for(j=Vars.begin();j<Vars.end();++j)fwrite(j->foes.data,sizeof(u_long),j->foes.data_size,F);
+  for(j=Vars.begin();j<Vars.end();++j)fwrite(j->foes.words(),sizeof(bool_vector::word),j->foes.n_words(),F);
   write_int(2*n,F);
   for(int i=0;i<n;++i){
     write_int(n,F);

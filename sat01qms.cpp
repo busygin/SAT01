@@ -31,9 +31,15 @@
 // orthant cannot single them out, since a nonnegative point there need not
 // respect the 2-clauses; -D replaces it by the greedy 2-clause projection
 // (see two_clause_projection()) and asks for 300 iterations unless QMS_DR
-// says otherwise.  The other QMS_* switches of qualex-ms apply too, QMS_META_N
-// among them, which with -m adds the Meta-NBIW stage on that many of the best
-// multipliers at the radius of m.
+// says otherwise.  -W drives the points onto the surface of the standard
+// clique wrapper H_0 as well, {x^T H_0 x = 1, z^T x = 1}, on which every
+// solution lies too (Douglas-Rachford then runs between the product of the
+// sphere and that surface and the diagonal of the orthant or of the 2-clause
+// set, or with QMS_DR_CONCUR in the product space of the three sets, see
+// try_dr_points()).  H_0 is proper, so the sphere, the orthant and its surface
+// meet exactly in the solutions.  The other QMS_* switches of
+// qualex-ms apply too, QMS_META_N among them, which with -m adds the Meta-NBIW
+// stage on that many of the best multipliers at the radius of m.
 //
 // A clique of weight m is checked against the original instance and written
 // to <base>.qms.out in the format of the solver's .out files.
@@ -192,16 +198,17 @@ static double seconds_since(chrono::steady_clock::time_point t) {
 }
 
 int main(int argc, char** argv) {
-  bool standard = false, at_m = false, clause_dr = false;
+  bool standard = false, at_m = false, clause_dr = false, standard_surface = false;
   const char* name = nullptr;
   for(int a=1;a<argc;++a) {
     if(!strcmp(argv[a],"-s")) standard = true;
     else if(!strcmp(argv[a],"-m")) at_m = true;
     else if(!strcmp(argv[a],"-D")) clause_dr = true;
+    else if(!strcmp(argv[a],"-W")) standard_surface = true;
     else name = argv[a];
   }
   if(!name) {
-    puts("Syntax: sat01qms [-s] [-m] [-D] <sat01_file>\n"
+    puts("Syntax: sat01qms [-s] [-m] [-D] [-W] <sat01_file>\n"
          "Runs the full propagation of the SAT01 solver and then QUALEX-MS, without\n"
          "search, on the clique problem left: the free variables weighted by their\n"
          "numbers of equations, adjacent iff they do not contradict.  QUALEX-MS works\n"
@@ -209,16 +216,19 @@ int main(int argc, char** argv) {
          "with -m takes its stationary points at the radius of a clique of weight m\n"
          "(the number of equations), the weight of a solution, with the method of\n"
          "QUALEX-MS 1.2.  -D runs its Douglas-Rachford stage (QMS_DR, 300 iterations\n"
-         "unless set) with the 2-clause projection instead of the orthant.  A clique\n"
-         "of weight m is a solution, which is checked against the instance and\n"
-         "written to <base>.qms.out.");
+         "unless set) with the 2-clause projection instead of the orthant, and -W\n"
+         "(the same iterations) drives its points onto the surface of the standard\n"
+         "clique wrapper as well.  A clique of weight m is a solution, which is\n"
+         "checked against the instance and written to <base>.qms.out.");
     return 1;
   }
   const char* wrapper = standard ? "standard" : "equation";
   const char* radius = at_m ? "m" : "anchor";
-  if(clause_dr) setenv("QMS_DR","300",0);
-  const char* dr = getenv("QMS_DR")==nullptr || atoi(getenv("QMS_DR"))<=0 ? "off" :
+  if(clause_dr || standard_surface) setenv("QMS_DR","300",0);
+  string dr_sets = getenv("QMS_DR")==nullptr || atoi(getenv("QMS_DR"))<=0 ? "off" :
                    clause_dr ? "clause" : "orthant";
+  if(standard_surface && dr_sets!="off") dr_sets += "+standard";
+  const char* dr = dr_sets.c_str();
 
   Sat01 sat01;
   try {
@@ -264,11 +274,20 @@ int main(int argc, char** argv) {
     vector<double> a((size_t)g.n*g.n);
     if(standard) build_wrapper(g,info,a.data());
     else build_equation_wrapper(sat01,residual,info,a.data());
+    DRTargets targets;
+    Projection clause;
+    if(clause_dr) {
+      clause = two_clause_projection(sat01,residual);
+      targets.projection = &clause;
+    }
+    if(standard_surface) {  // made before qualex_ms() decomposes a (see wrapper_surface())
+      vector<double> a0((size_t)g.n*g.n);
+      build_wrapper(g,info,a0.data());
+      targets.surfaces.push_back(wrapper_surface(info,a0.data()));
+    }
     // with -m, the clique sought on the vertices left weighs m less what
     // preprocessing preselected
-    Projection clause;
-    if(clause_dr) clause = two_clause_projection(sat01,residual);
-    qualex_ms(info,a.data(),at_m ? m-preselected_weight : 0.0,clause_dr ? &clause : nullptr);
+    qualex_ms(info,a.data(),at_m ? m-preselected_weight : 0.0,&targets);
     if(info.lower_clique_bound>clique_weight) {
       clique_weight = info.lower_clique_bound;
       clique.clear();

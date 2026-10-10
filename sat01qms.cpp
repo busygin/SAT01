@@ -37,7 +37,9 @@
 // sphere and that surface and the diagonal of the orthant or of the 2-clause
 // set, or with QMS_DR_CONCUR in the product space of the three sets, see
 // try_dr_points()).  H_0 is proper, so the sphere, the orthant and its surface
-// meet exactly in the solutions.  The other QMS_* switches of
+// meet exactly in the solutions.  -N is -W without the orthant, the sphere and
+// the surface alone, as the control for what nonnegativity costs and buys.
+// The other QMS_* switches of
 // qualex-ms apply too, QMS_META_N among them, which with -m adds the Meta-NBIW
 // stage on that many of the best multipliers at the radius of m.
 //
@@ -199,16 +201,18 @@ static double seconds_since(chrono::steady_clock::time_point t) {
 
 int main(int argc, char** argv) {
   bool standard = false, at_m = false, clause_dr = false, standard_surface = false;
+  bool surfaces_only = false;
   const char* name = nullptr;
   for(int a=1;a<argc;++a) {
     if(!strcmp(argv[a],"-s")) standard = true;
     else if(!strcmp(argv[a],"-m")) at_m = true;
     else if(!strcmp(argv[a],"-D")) clause_dr = true;
     else if(!strcmp(argv[a],"-W")) standard_surface = true;
+    else if(!strcmp(argv[a],"-N")) standard_surface = surfaces_only = true;
     else name = argv[a];
   }
-  if(!name) {
-    puts("Syntax: sat01qms [-s] [-m] [-D] [-W] <sat01_file>\n"
+  if(!name || (surfaces_only && clause_dr)) {
+    puts("Syntax: sat01qms [-s] [-m] [-D] [-W | -N] <sat01_file>\n"
          "Runs the full propagation of the SAT01 solver and then QUALEX-MS, without\n"
          "search, on the clique problem left: the free variables weighted by their\n"
          "numbers of equations, adjacent iff they do not contradict.  QUALEX-MS works\n"
@@ -218,8 +222,9 @@ int main(int argc, char** argv) {
          "QUALEX-MS 1.2.  -D runs its Douglas-Rachford stage (QMS_DR, 300 iterations\n"
          "unless set) with the 2-clause projection instead of the orthant, and -W\n"
          "(the same iterations) drives its points onto the surface of the standard\n"
-         "clique wrapper as well.  A clique of weight m is a solution, which is\n"
-         "checked against the instance and written to <base>.qms.out.");
+         "clique wrapper as well; -N drives them onto that surface alone, without\n"
+         "the orthant (so not with -D).  A clique of weight m is a solution, which\n"
+         "is checked against the instance and written to <base>.qms.out.");
     return 1;
   }
   const char* wrapper = standard ? "standard" : "equation";
@@ -227,7 +232,8 @@ int main(int argc, char** argv) {
   if(clause_dr || standard_surface) setenv("QMS_DR","300",0);
   string dr_sets = getenv("QMS_DR")==nullptr || atoi(getenv("QMS_DR"))<=0 ? "off" :
                    clause_dr ? "clause" : "orthant";
-  if(standard_surface && dr_sets!="off") dr_sets += "+standard";
+  if(surfaces_only && dr_sets!="off") dr_sets = "standard";
+  else if(standard_surface && dr_sets!="off") dr_sets += "+standard";
   const char* dr = dr_sets.c_str();
 
   Sat01 sat01;
@@ -275,6 +281,7 @@ int main(int argc, char** argv) {
     if(standard) build_wrapper(g,info,a.data());
     else build_equation_wrapper(sat01,residual,info,a.data());
     DRTargets targets;
+    targets.surfaces_only = surfaces_only;
     Projection clause;
     if(clause_dr) {
       clause = two_clause_projection(sat01,residual);
